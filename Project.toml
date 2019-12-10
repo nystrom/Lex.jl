@@ -1,0 +1,4 @@
+name = "Lex"
+uuid = "c630e30d-806a-4ad8-b6de-8441e954589c"
+authors = ["Nate Nystrom <nate.nystrom@gmail.com>"]
+version = "0.1.0"
