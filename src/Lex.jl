@@ -1,6 +1,9 @@
 module Lex
 
-export null, epsilon, star, ch, str, alt, concat, deriv
+export null, epsilon, star, ch, str, alt, concat
+export plus, option
+export chars, digit, number, lower, upper, letter, word, ident
+export deriv
 
 import Base: cmp, isempty, match, isless, isgreater, isequal
 
@@ -18,14 +21,6 @@ end
 struct Star <: Regex
   r :: Regex
 end
-
-null = Alt(Regex[])
-epsilon = Concat(Regex[])
-star(r) = Star(r)
-ch(ch) = Ch(ch)
-str(s) = concat(map(ch, collect(s)))
-plus(r) = concat(r, star(r))
-option(r) = alt(r, epsilon)
 
 """ Regex derivative WRT a character """
 function deriv(a::Char, r::Ch)
@@ -66,9 +61,14 @@ function deriv(a::String, r::Regex)::Regex
     end
 end
 
-""" Create an Alt regex, normalizing """
+""" Create a Alt regex, normalizing """
 function alt(rs::Vector{T})::Regex where {T <: Regex}
-    rs1 = filter(r -> !isnull(r), rs)
+    rst = Regex[]
+    flat(v) = for x in v
+        if isa(x, Concat) flat(x.rs) else push!(rst, x) end
+    end
+    flat(rs)
+    rs1 = filter(r -> !isnull(r), rst)
     rs2 = sort(rs1)
     if length(rs2) == 1
         rs2[1]
@@ -76,6 +76,7 @@ function alt(rs::Vector{T})::Regex where {T <: Regex}
         Alt(rs2)
     end
 end
+
 
 """ Return true if the regex is null """
 isnull(r::Alt) = isempty(r.rs)
@@ -86,15 +87,17 @@ isempty(r::Regex) = false
 
 """ Create a Concat regex, normalizing """
 function concat(rs::Vector{T})::Regex where {T <: Regex}
-    if Base.any(isnull, rs)
+    rst = Regex[]
+    flat(v) = for x in v
+        if isa(x, Concat) flat(x.rs) else push!(rst, x) end
+    end
+    flat(rs)
+    if Base.any(isnull, rst)
         null
+    elseif length(rst) == 1
+        rst[1]
     else
-        rs1 = filter(r -> !isempty(r), rs)
-        if length(rs1) == 1
-            rs1[1]
-        else
-            Concat(rs1)
-        end
+        Concat(rst)
     end
 end
 
@@ -139,24 +142,22 @@ function isless(r1::Regex, r2::Regex) cmp(r1, r2) < 0 end
 function isgreater(r1::Regex, r2::Regex) cmp(r1, r2) < 0 end
 function isequal(r1::Regex, r2::Regex) cmp(r1, r2) == 0 end
 
+null = Alt(Regex[])
+epsilon = Concat(Regex[])
+star(r) = Star(r)
+ch(ch) = Ch(ch)
+str(s) = concat(map(ch, collect(s)))
+plus(r) = concat(Regex[r, star(r)])
+option(r) = alt(Regex[r, epsilon])
+chars(s) = alt(map(ch, collect(s)))
+digit = chars("0123456789")
+number = plus(digit)
+lower = chars("abcdefghijklmnopqrstuvwxyz")
+upper = chars("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+letter = alt(Regex[lower, upper])
+word = plus(letter)
+ident = concat(Regex[letter, star(alt(Regex[letter, digit]))])
 
-# -- factories
-# char c = Ch c
-# epsilon = Empty
-# r1 <|> r2 = alt r1 r2
-# r1 <*> r2 = concat r1 r2
-# many r = Star r
-# many1 r = concat r (Star r)
-# chars "" = epsilon
-# chars (c:"") = Ch c
-# chars (c:cs) = Ch c <|> chars cs
-# 
-# digit = chars ['0'..'9']
-# number = many1 digit
-# lower = chars ['a'..'z']
-# upper = chars ['A'..'Z']
-# letter = lower <|> upper
-# word = many1 letter
-# ident = letter <*> (many (letter <|> digit))
+
 
 end # module
