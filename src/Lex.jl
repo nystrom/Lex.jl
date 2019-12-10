@@ -2,42 +2,32 @@ module Lex
 
 export null, epsilon, star, ch, str, alt, concat, deriv
 
-import Base: cmp, isempty, match
+import Base: cmp, isempty, match, isless, isgreater, isequal
 
 """ Regex type """
 abstract type Regex end
-struct Null <: Regex end
-struct Empty <: Regex end
 struct Ch <: Regex
   ch :: Char
 end
 struct Concat <: Regex
-  r1 :: Regex
-  r2 :: Regex
+  rs :: Vector{Regex}
 end
 struct Alt <: Regex
-  r1 :: Regex
-  r2 :: Regex
+  rs :: Vector{Regex}
 end
 struct Star <: Regex
   r :: Regex
 end
 
-null = Null()
-epsilon = Empty()
+null = Alt(Regex[])
+epsilon = Concat(Regex[])
 star(r) = Star(r)
 ch(ch) = Ch(ch)
-str(s) = begin
-    if isempty(s)
-        epsilon
-    else
-        concat(ch(s[1]), str(s[2:end]))
-    end
-end
+str(s) = concat(map(ch, collect(s)))
+plus(r) = concat(r, star(r))
+option(r) = alt(r, epsilon)
 
 """ Regex derivative WRT a character """
-function deriv(a::Char, r::Null) null end
-function deriv(a::Char, r::Empty) null end
 function deriv(a::Char, r::Ch)
     if a == r.ch
         epsilon
@@ -46,13 +36,25 @@ function deriv(a::Char, r::Ch)
     end
 end
 function deriv(a::Char, r::Concat)
-    alt(concat(deriv(a, r.r1), r.r2), concat(nullable(r.r1), r.r2))
+    if isempty(r.rs)
+        null
+    elseif length(r.rs) == 1
+        deriv(a, r.rs[1])
+    else
+        alt([concat(Regex[deriv(a, r.rs[1]), concat(r.rs[2:end])]), concat(Regex[nullable(r.rs[1]), concat(r.rs[2:end])])])
+    end
 end
 function deriv(a::Char, r::Alt)
-    alt(deriv(a, r.r1), deriv(a, r.r2))
+    if isempty(r.rs)
+        null
+    elseif length(r.rs) == 1
+        deriv(a, r.rs[1])
+    else
+        alt(map(s -> deriv(a, s), r.rs))
+    end
 end
 function deriv(a::Char, r::Star)
-    concat(deriv(a, r.r), r)
+    concat(Regex[deriv(a, r.r), r])
 end
 
 """ Regex derivative WRT a string """
@@ -65,112 +67,66 @@ function deriv(a::String, r::Regex)::Regex
 end
 
 """ Create an Alt regex, normalizing """
-function alt(r1::Null, r2::Regex) r2 end
-function alt(r1::Regex, r2::Null) r1 end
-function alt(r1::Null, r2::Null) r1 end
-function alt(r1::Empty, r2::Empty) r1 end
-function alt(r1::Regex, r2::Regex)
-    c = cmp(r1, r2)
-    if c < 0
-        Alt(r1, r2)
-    elseif c > 0
-        Alt(r2, r1)
+function alt(rs::Vector{T})::Regex where {T <: Regex}
+    rs1 = filter(r -> !isnull(r), rs)
+    rs2 = sort(rs1)
+    if length(rs2) == 1
+        rs2[1]
     else
-        r1
+        Alt(rs2)
     end
 end
 
+""" Return true if the regex is null """
+isnull(r::Alt) = isempty(r.rs)
+isnull(r::Regex) = false
+""" Return true if the regex is empty """
+isempty(r::Concat) = isempty(r.rs)
+isempty(r::Regex) = false
+
 """ Create a Concat regex, normalizing """
-
-function concat(r1::Null, r2::Regex) null end
-function concat(r1::Null, r2::Null) null end
-function concat(r1::Empty, r2::Null) null end
-function concat(r1::Ch, r2::Null) null end
-function concat(r1::Alt, r2::Null) null end
-function concat(r1::Concat, r2::Null) null end
-function concat(r1::Star, r2::Null) null end
-
-function concat(r1::Empty, r2::Regex) r2 end
-function concat(r1::Null, r2::Empty) r1 end
-function concat(r1::Empty, r2::Empty) r1 end
-function concat(r1::Ch, r2::Empty) r1 end
-function concat(r1::Alt, r2::Empty) r1 end
-function concat(r1::Concat, r2::Empty) r1 end
-function concat(r1::Star, r2::Empty) r1 end
-
-function concat(r1::Alt, r2::Alt) alt(alt(concat(r1.r1, r2.r1), concat(r1.r2, r2.r1)),
-                                      alt(concat(r1.r1, r2.r2), concat(r1.r2, r2.r2))) end
-function concat(r1::Alt, r2::Regex) alt(concat(r1.r1, r2), concat(r1.r2, r2)) end
-function concat(r1::Regex, r2::Alt) alt(concat(r1, r2.r1), concat(r1, r2.r1)) end
-
-function concat(r1::Regex, r2::Regex) Concat(r1, r2) end
+function concat(rs::Vector{T})::Regex where {T <: Regex}
+    if Base.any(isnull, rs)
+        null
+    else
+        rs1 = filter(r -> !isempty(r), rs)
+        if length(rs1) == 1
+            rs1[1]
+        else
+            Concat(rs1)
+        end
+    end
+end
 
 """ If r is nullable, return Empty (true), else return Null (false) """
-function nullable(r::Null) r end
-function nullable(r::Empty) r end
-function nullable(r::Ch) null end
-function nullable(r::Concat) concat(nullable(r.r1), nullable(r.r2)) end
-function nullable(r::Alt) alt(nullable(r.r1), nullable(r.r2)) end
-function nullable(r::Star) epsilon end
+function nullable(r::Ch)::Regex null end
+function nullable(r::Concat)::Regex concat(map(nullable, r.rs)) end
+function nullable(r::Alt)::Regex alt(map(nullable, r.rs)) end
+function nullable(r::Star)::Regex epsilon end
 
 """ Return true if the regex matches the string """
 function match(r::Regex, s::String)::Bool
     isempty(nullable(deriv(s, r)))
 end
 
-""" Return true if the regex is empty """
-function isempty(r::Regex) false end
-function isempty(r::Empty) true end
 
 """ Compare two regexes, structurally """
-function cmp(r1::Null, r2::Null) 0 end
-function cmp(r1::Null, r2::Regex) -1 end
-
-function cmp(r1::Empty, r2::Null) 1 end
-function cmp(r1::Empty, r2::Empty) 0 end
-function cmp(r1::Empty, r2::Regex) -1 end
-
-function cmp(r1::Ch, r2::Null) 1 end
-function cmp(r1::Ch, r2::Empty) 1 end
 function cmp(r1::Ch, r2::Ch) cmp(r1.ch, r2.ch) end
 function cmp(r1::Ch, r2::Regex) -1 end
 
-function cmp(r1::Alt, r2::Null) 1 end
-function cmp(r1::Alt, r2::Empty) 1 end
 function cmp(r1::Alt, r2::Ch) 1 end
 function cmp(r1::Alt, r2::Alt)
-    cmp1 = cmp(r1.r1, r2.r1)
-    cmp2 = cmp(r1.r2, r2.r2)
-    if cmp1 < 0
-        cmp1
-    elseif cmp1 == 0
-        cmp2
-    else
-        cmp1
-    end
+    cmp(r1.rs, r2.rs)
 end
-    
 function cmp(r1::Alt, r2::Regex) -1 end
 
-function cmp(r1::Concat, r2::Null) 1 end
-function cmp(r1::Concat, r2::Empty) 1 end
 function cmp(r1::Concat, r2::Ch) 1 end
 function cmp(r1::Concat, r2::Alt) 1 end
 function cmp(r1::Concat, r2::Concat)
-    cmp1 = cmp(r1.r1, r2.r1)
-    cmp2 = cmp(r1.r2, r2.r2)
-    if cmp1 < 0
-        cmp1
-    elseif cmp1 == 0
-        cmp2
-    else
-        cmp1
-    end
+    cmp(r1.rs, r2.rs)
 end
 function cmp(r1::Concat, r2::Regex) -1 end
 
-function cmp(r1::Star, r2::Null) 1 end
-function cmp(r1::Star, r2::Empty) 1 end
 function cmp(r1::Star, r2::Ch) 1 end
 function cmp(r1::Star, r2::Alt) 1 end
 function cmp(r1::Star, r2::Concat) 1 end
@@ -178,6 +134,10 @@ function cmp(r1::Star, r2::Star)
     cmp(r1.r, r2.r)
 end
 function cmp(r1::Star, r2::Regex) -1 end
+
+function isless(r1::Regex, r2::Regex) cmp(r1, r2) < 0 end
+function isgreater(r1::Regex, r2::Regex) cmp(r1, r2) < 0 end
+function isequal(r1::Regex, r2::Regex) cmp(r1, r2) == 0 end
 
 
 # -- factories
